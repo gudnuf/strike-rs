@@ -1,7 +1,7 @@
 //! Strike Webhooks
 
 use anyhow::anyhow;
-use axum::body::{self, BoxBody, Full};
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::request::Request;
 use axum::http::StatusCode;
@@ -9,11 +9,10 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use ring::hmac::{self, Key};
+use ring::hmac;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower::ServiceBuilder;
-use tower_http::ServiceBuilderExt;
 
 use crate::{hex, Strike};
 
@@ -72,9 +71,10 @@ impl Strike {
 
         let router = Router::new()
             .route(webhook_endpoint, post(handle_invoice))
-            .layer(ServiceBuilder::new().map_request_body(body::boxed).layer(
-                middleware::from_fn_with_state(state.clone(), verify_request_body),
-            ))
+            .layer(ServiceBuilder::new().layer(middleware::from_fn_with_state(
+                state.clone(),
+                verify_request_body,
+            )))
             .with_state(state);
 
         Ok(router)
@@ -125,8 +125,8 @@ impl Strike {
 // middleware to consume the request body upfront
 async fn verify_request_body(
     State(state): State<WebhookState>,
-    request: Request<BoxBody>,
-    next: Next<BoxBody>,
+    request: Request<Body>,
+    next: Next,
 ) -> Result<impl IntoResponse, Response> {
     let request = buffer_request_body(request, &state.webhook_secret).await?;
 
@@ -136,12 +136,12 @@ async fn verify_request_body(
 // take the request apart, buffer the body,
 // veridy signature, then put the request back together
 async fn buffer_request_body(
-    request: Request<BoxBody>,
+    request: Request<Body>,
     secret: &str,
-) -> Result<Request<BoxBody>, Response> {
+) -> Result<Request<Body>, Response> {
     let (parts, body) = request.into_parts();
 
-    let bytes = hyper::body::to_bytes(body)
+    let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response())?;
 
@@ -160,10 +160,9 @@ async fn buffer_request_body(
         })?;
 
     verify_request_signature(signature, &bytes, secret.as_bytes())
-        .map_err(|_| StatusCode::UNAUTHORIZED)
-        .into_response();
+        .map_err(|_| StatusCode::UNAUTHORIZED.into_response())?;
 
-    Ok(Request::from_parts(parts, body::boxed(Full::from(bytes))))
+    Ok(Request::from_parts(parts, Body::from(bytes)))
 }
 
 /// Webhook data
@@ -193,13 +192,7 @@ struct WebHookResponse {
     /// Delivery Success
     delivery_success: Option<bool>,
 }
-// Function to compute HMAC SHA-256
-fn compute_hmac(content: &[u8], key: &Key) -> Vec<u8> {
-    let tag = hmac::sign(key, content);
-    tag.as_ref().to_vec()
-}
 
-// Function to verify request signature
 fn verify_request_signature(
     request_signature: &str,
     body: &[u8],
@@ -207,10 +200,7 @@ fn verify_request_signature(
 ) -> anyhow::Result<()> {
     let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
 
-    let body = serde_json::from_slice(body)?;
-    let content_signature = compute_hmac(body, &key);
-
-    hmac::verify(&key, &hex::decode(request_signature)?, &content_signature).map_err(|_| {
+    hmac::verify(&key, body, &hex::decode(request_signature)?).map_err(|_| {
         log::warn!("Request did not have a valid signature");
 
         anyhow!("Invalid signature")

@@ -8,7 +8,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail};
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::Rng;
 use reqwest::{Client, IntoUrl, Url};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -137,7 +137,7 @@ impl Strike {
         };
 
         let client = reqwest::Client::builder().build()?;
-        let secret: String = rand::thread_rng()
+        let secret: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(15)
             .map(char::from)
