@@ -24,10 +24,21 @@ rand = "0.9.1"
 ring = "0.17.8"
 tower = "0.5.2"
 thiserror = "2.0.12"
+urlencoding = "2.1"
 
 [dev-dependencies]
-tokio = { version = "1", features =["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features =["rt-multi-thread", "macros", "sync", "time", "signal"] }
 dotenvy = "0.15"
+env_logger = "0.11"
 
 [[example]]
 name = "create_invoice"
+
+[[example]]
+name = "get_invoices"
+
+[[example]]
+name = "currency_exchange"
+
+[[example]]
+name = "currency_exchange_webhook"

@@ -15,12 +15,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 mod error;
+pub mod exchange;
 pub(crate) mod hex;
 pub mod invoice;
 pub mod pay_ln;
 pub mod webhooks;
 
 pub use error::Error;
+pub use exchange::*;
 pub use invoice::*;
 pub use pay_ln::*;
 
@@ -43,6 +45,12 @@ pub enum Currency {
     EUR,
     /// Bitcoin
     BTC,
+    /// Tether USD
+    USDT,
+    /// British Pound
+    GBP,
+    /// Australian Dollar
+    AUD,
 }
 
 impl fmt::Display for Currency {
@@ -51,6 +59,9 @@ impl fmt::Display for Currency {
             Self::USD => write!(f, "USD"),
             Self::EUR => write!(f, "EUR"),
             Self::BTC => write!(f, "BTC"),
+            Self::USDT => write!(f, "USDT"),
+            Self::GBP => write!(f, "GBP"),
+            Self::AUD => write!(f, "AUD"),
         }
     }
 }
@@ -63,6 +74,20 @@ pub struct Amount {
     /// Value of amount
     #[serde(deserialize_with = "parse_f64_from_string")]
     pub amount: f64,
+}
+
+/// Amount with fee policy for payment requests
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentAmount {
+    /// Currency amount in decimal format
+    #[serde(deserialize_with = "parse_f64_from_string")]
+    pub amount: f64,
+    /// Currency code
+    pub currency: Currency,
+    /// Should the fee be included in the amount or added on top of it
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee_policy: Option<FeePolicy>,
 }
 
 fn parse_f64_from_string<'de, D>(deserializer: D) -> Result<f64, D::Error>
@@ -103,6 +128,30 @@ pub enum InvoiceState {
     Unpaid,
     /// Invoice pending
     Pending,
+    /// Payment failed
+    Failed,
+}
+
+/// Payment result (obsolete, use InvoiceState instead)
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum PaymentResult {
+    /// Payment pending
+    Pending,
+    /// Payment successful
+    Success,
+    /// Payment failed
+    Failure,
+}
+
+/// Fee policy for payments
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum FeePolicy {
+    /// Fee is included in the amount
+    Inclusive,
+    /// Fee is added on top of the amount
+    Exclusive,
 }
 
 /// Conversion rate for quote
@@ -117,6 +166,22 @@ pub struct ConversionRate {
     /// Target Unit
     #[serde(rename = "targetCurrency")]
     pub target_currency: Currency,
+}
+
+/// Lightning network payment details
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LightningPaymentDetails {
+    /// The fee required by LN network, if any
+    pub network_fee: Option<Amount>,
+}
+
+/// On-chain payment details
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnchainPaymentDetails {
+    /// The COMPLETED onchain payment's transaction ID
+    pub txn_id: Option<String>,
 }
 
 impl Strike {
@@ -231,6 +296,23 @@ impl Strike {
             .map_err(|err| anyhow!("Error making delete: {}", err.to_string()))?;
 
         Ok(())
+    }
+
+    // NOTE: i was getting errors when making regular patch requests, so i made this one and it works,
+    // but we shouldn't need it
+    async fn make_patch_no_body<U>(&self, url: U) -> anyhow::Result<reqwest::Response>
+    where
+        U: IntoUrl,
+    {
+        let res = self
+            .client
+            .patch(url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Length", "0")
+            .header("accept", "application/json")
+            .send()
+            .await?;
+        Ok(res)
     }
 
     /*

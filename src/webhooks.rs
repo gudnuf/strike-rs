@@ -80,6 +80,28 @@ impl Strike {
         Ok(router)
     }
 
+    /// Create currency exchange webhook router
+    pub async fn create_currency_exchange_webhook_router(
+        &self,
+        webhook_endpoint: &str,
+        sender: tokio::sync::mpsc::Sender<String>,
+    ) -> anyhow::Result<Router> {
+        let state = WebhookState {
+            sender,
+            webhook_secret: self.webhook_secret.clone(),
+        };
+
+        let router = Router::new()
+            .route(webhook_endpoint, post(handle_currency_exchange))
+            .layer(ServiceBuilder::new().layer(middleware::from_fn_with_state(
+                state.clone(),
+                verify_request_body,
+            )))
+            .with_state(state);
+
+        Ok(router)
+    }
+
     /// Subscribe to invoice webhook
     pub async fn subscribe_to_invoice_webhook(&self, webhook_url: String) -> anyhow::Result<()> {
         let url = self.base_url.join("/v1/subscriptions")?;
@@ -97,6 +119,30 @@ impl Strike {
             .await?;
 
         log::debug!("Created Webhook subscription: {}", res);
+
+        Ok(())
+    }
+
+    /// Subscribe to currency exchange quote webhook
+    pub async fn subscribe_to_currency_exchange_webhook(
+        &self,
+        webhook_url: String,
+    ) -> anyhow::Result<()> {
+        let url = self.base_url.join("/v1/subscriptions")?;
+
+        let subscription = WebhookRequest {
+            webhook_url,
+            webhook_version: "v1".to_string(),
+            secret: self.webhook_secret.clone(),
+            enabled: true,
+            event_types: vec!["currency-exchange-quote.updated".to_string()],
+        };
+
+        let res = self
+            .make_post(url, Some(serde_json::to_value(subscription)?))
+            .await?;
+
+        log::debug!("Created currency exchange webhook subscription: {}", res);
 
         Ok(())
     }
@@ -219,6 +265,27 @@ async fn handle_invoice(
 
     log::debug!(
         "Received webhook update for: {}",
+        webhook_response.data.entity_id
+    );
+
+    if let Err(err) = state.sender.send(webhook_response.data.entity_id).await {
+        log::warn!("Could not send on channel: {}", err);
+    }
+    Ok(StatusCode::OK)
+}
+
+async fn handle_currency_exchange(
+    State(state): State<WebhookState>,
+    Json(payload): Json<Value>,
+) -> Result<StatusCode, StatusCode> {
+    let webhook_response: WebHookResponse = serde_json::from_value(payload).map_err(|_err| {
+        log::warn!("Got an invalid payload on currency exchange webhook");
+
+        StatusCode::UNPROCESSABLE_ENTITY
+    })?;
+
+    log::debug!(
+        "Received currency exchange webhook update for: {}",
         webhook_response.data.entity_id
     );
 

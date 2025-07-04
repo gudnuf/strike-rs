@@ -16,10 +16,18 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         flakeboxLib = flakebox.lib.${system} { };
+        pkgs = nixpkgs.legacyPackages.${system};
       in
       {
         devShells = flakeboxLib.mkShells {
-          packages = [ ];
+          packages = [
+            pkgs.rust-analyzer
+            pkgs.rustup
+          ];
+          # Ensure rust-src is available
+          shellHook = ''
+            export RUST_SRC_PATH="${pkgs.rustPlatform.rustLibSrc}"
+          '';
         };
       });
 }

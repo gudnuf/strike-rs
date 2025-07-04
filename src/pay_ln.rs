@@ -4,15 +4,18 @@ use anyhow::{bail, Result};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use crate::{Amount, ConversionRate, Currency, Error, InvoiceState, Strike};
+use crate::{
+    Amount, ConversionRate, Currency, Error, InvoiceState, LightningPaymentDetails,
+    OnchainPaymentDetails, Strike,
+};
 
 /// Pay Invoice Request
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PayInvoiceQuoteRequest {
-    /// Bolt11 Invoice
+    /// Bolt11 Invoice to pay
     pub ln_invoice: String,
-    /// Source Currency
+    /// Currency to send from
     pub source_currency: Currency,
 }
 
@@ -25,15 +28,19 @@ pub struct PayInvoiceQuoteResponse {
     /// Description
     pub description: Option<String>,
     /// Quote valid till
-    pub valid_until: String,
+    pub valid_until: Option<String>,
     /// Conversion quote
     pub conversion_rate: Option<ConversionRate>,
-    /// Amount
+    /// The amount that the receiver will receive in sender’s currency
     pub amount: Amount,
     /// Network fee
-    pub lightning_network_fee: Amount,
-    /// Total amount including fee
+    pub lightning_network_fee: Option<Amount>,
+    /// The total of all fees
+    pub total_fee: Option<Amount>,
+    /// The amount that the sender will spend
     pub total_amount: Amount,
+    /// Reward that the sender might receive, if applicable
+    pub reward: Option<Amount>,
 }
 
 /// Pay Quote Response
@@ -42,18 +49,26 @@ pub struct PayInvoiceQuoteResponse {
 pub struct InvoicePaymentResponse {
     /// Payment id
     pub payment_id: String,
-    /// Invoice state
+    /// Status of the payment execution
     pub state: InvoiceState,
-    /// Completed time stamp
+    /// The timestamp of the payment completion
     pub completed: Option<String>,
     /// Conversion quote
     pub conversion_rate: Option<ConversionRate>,
-    /// Amount
+    /// The amount that the receiver will receive in sender's currency
     pub amount: Amount,
-    /// Network fee
-    pub lightning_network_fee: Amount,
-    /// Total amount including fee
+    /// The total of all fees
+    pub total_fee: Option<Amount>,
+    /// The fee required by LN network. Only applicable for LN payments
+    pub lightning_network_fee: Option<Amount>,
+    /// The amount that the sender will spend
     pub total_amount: Amount,
+    /// Reward that the sender might receive, if applicable
+    pub reward: Option<Amount>,
+    /// Details about the payment if it was made through the Lightning Network
+    pub lightning: Option<LightningPaymentDetails>,
+    /// Details about the payment if it was made on chain
+    pub onchain: Option<OnchainPaymentDetails>,
 }
 
 impl Strike {
