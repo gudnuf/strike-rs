@@ -1,7 +1,7 @@
 use anyhow::Result;
 use dotenvy::dotenv;
 use std::env;
-use strike_rs::{Currency, CurrencyExchangeQuoteRequest, Strike};
+use strike_rs::{Currency, CurrencyExchangeQuoteRequest, ExchangeAmount, Strike};
 use tokio::sync::mpsc;
 
 #[tokio::main]
@@ -29,12 +29,15 @@ async fn main() -> Result<()> {
     println!("Webhook subscription created for currency exchange events");
 
     // Create a currency exchange quote
-    let exchange_request = CurrencyExchangeQuoteRequest::new(
-        Currency::USD,
-        Currency::BTC,
-        "5.00".to_string(),
-        Currency::USD,
-    );
+    let exchange_request = CurrencyExchangeQuoteRequest {
+        sell: Currency::USD,
+        buy: Currency::BTC,
+        amount: ExchangeAmount {
+            amount: "5.00".to_string(),
+            currency: Currency::USD,
+            fee_policy: None,
+        },
+    };
 
     let quote = client
         .create_currency_exchange_quote(exchange_request)

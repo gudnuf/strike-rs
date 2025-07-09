@@ -1,6 +1,6 @@
 //! Handle invoice creation
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{Amount, ConversionRate, InvoiceState, Strike};
@@ -94,11 +94,103 @@ pub struct InvoiceListResponse {
     pub count: i64,
 }
 
-/// Query parameters for getting invoices
+/// Supported filter operations for OData queries.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FilterOp {
+    /// Equal to
+    Eq,
+    /// Not equal to
+    Ne,
+    /// Greater than
+    Gt,
+    /// Less than
+    Lt,
+    /// Greater than or equal to
+    Ge,
+    /// Less than or equal to
+    Le,
+    // Add more as needed
+}
+
+/// Represents a single OData filter condition for invoice queries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Filter {
+    /// The field to filter on (as specified in the API spec)
+    pub field: &'static str,
+    /// The filter operation (e.g., Eq, Ne, Gt, etc.)
+    pub op: FilterOp,
+    /// The value to compare against
+    pub value: String,
+}
+
+impl Filter {
+    /// Create an equality filter (field eq value)
+    pub fn eq(field: &'static str, value: impl ToString) -> Self {
+        Self {
+            field,
+            op: FilterOp::Eq,
+            value: value.to_string(),
+        }
+    }
+    /// Create a not-equal filter (field ne value)
+    pub fn ne(field: &'static str, value: impl ToString) -> Self {
+        Self {
+            field,
+            op: FilterOp::Ne,
+            value: value.to_string(),
+        }
+    }
+    /// Create a greater-than filter (field gt value)
+    pub fn gt(field: &'static str, value: impl ToString) -> Self {
+        Self {
+            field,
+            op: FilterOp::Gt,
+            value: value.to_string(),
+        }
+    }
+    /// Create a less-than filter (field lt value)
+    pub fn lt(field: &'static str, value: impl ToString) -> Self {
+        Self {
+            field,
+            op: FilterOp::Lt,
+            value: value.to_string(),
+        }
+    }
+    /// Create a greater-than-or-equal filter (field ge value)
+    pub fn ge(field: &'static str, value: impl ToString) -> Self {
+        Self {
+            field,
+            op: FilterOp::Ge,
+            value: value.to_string(),
+        }
+    }
+    /// Create a less-than-or-equal filter (field le value)
+    pub fn le(field: &'static str, value: impl ToString) -> Self {
+        Self {
+            field,
+            op: FilterOp::Le,
+            value: value.to_string(),
+        }
+    }
+    /// Convert the filter to an OData filter string (e.g., "field eq 'value'")
+    pub fn to_string(&self) -> String {
+        let op_str = match self.op {
+            FilterOp::Eq => "eq",
+            FilterOp::Ne => "ne",
+            FilterOp::Gt => "gt",
+            FilterOp::Lt => "lt",
+            FilterOp::Ge => "ge",
+            FilterOp::Le => "le",
+        };
+        format!("{} {} '{}'", self.field, op_str, self.value)
+    }
+}
+
+/// Query parameters for getting invoices, supporting flexible OData-style filtering and pagination.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InvoiceQueryParams {
-    /// Filter the results using OData syntax
-    pub filter: Option<String>,
+    /// OData filters as a list of Filter objects
+    pub filters: Vec<Filter>,
     /// Order the results using OData syntax
     pub orderby: Option<String>,
     /// Skip the specified number of entries
@@ -108,41 +200,51 @@ pub struct InvoiceQueryParams {
 }
 
 impl InvoiceQueryParams {
-    /// Create new query parameters
+    /// Create new query parameters with no filters or pagination.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set filter parameter
-    pub fn filter(mut self, filter: String) -> Self {
-        self.filter = Some(filter);
+    /// Add a filter condition to the query parameters.
+    ///
+    /// Filters are combined with logical AND in the resulting OData query.
+    pub fn filter(mut self, filter: Filter) -> Self {
+        self.filters.push(filter);
         self
     }
 
-    /// Set orderby parameter
-    pub fn orderby(mut self, orderby: String) -> Self {
-        self.orderby = Some(orderby);
+    /// Set the orderby parameter (OData syntax).
+    pub fn orderby(mut self, orderby: impl Into<String>) -> Self {
+        self.orderby = Some(orderby.into());
         self
     }
 
-    /// Set skip parameter
+    /// Set the number of records to skip.
     pub fn skip(mut self, skip: i32) -> Self {
         self.skip = Some(skip);
         self
     }
 
-    /// Set top parameter (max 100)
+    /// Set the maximum number of records to return (capped at 100).
     pub fn top(mut self, top: i32) -> Self {
         self.top = Some(top.min(100));
         self
     }
 
-    /// Convert to query string
+    /// Convert the query parameters to a query string suitable for an HTTP request.
+    ///
+    /// Filters are joined with 'and' and URL-encoded. Other parameters are appended as needed.
     fn to_query_string(&self) -> String {
         let mut params = Vec::new();
 
-        if let Some(filter) = &self.filter {
-            params.push(format!("$filter={}", urlencoding::encode(filter)));
+        if !self.filters.is_empty() {
+            let filter_str = self
+                .filters
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(" and ");
+            params.push(format!("$filter={}", urlencoding::encode(&filter_str)));
         }
 
         if let Some(orderby) = &self.orderby {
@@ -167,76 +269,61 @@ impl InvoiceQueryParams {
 
 impl Strike {
     /// Create Invoice
-    pub async fn create_invoice(&self, invoice_request: InvoiceRequest) -> Result<InvoiceResponse> {
+    pub async fn create_invoice(
+        &self,
+        invoice_request: InvoiceRequest,
+    ) -> Result<InvoiceResponse, crate::Error> {
         let url = self.base_url.join("/v1/invoices")?;
 
         let res = self
             .make_post(url, Some(serde_json::to_value(invoice_request)?))
             .await?;
 
-        match serde_json::from_value(res.clone()) {
-            Ok(res) => Ok(res),
-            Err(_) => {
-                log::error!("Api error response on invoice creation");
-                log::error!("{}", res);
-                bail!("Could not create invoice")
-            }
-        }
+        let invoice: InvoiceResponse = serde_json::from_value(res.clone())?;
+        Ok(invoice)
     }
 
     /// Find incoming invoice
-    pub async fn get_incoming_invoice(&self, invoice_id: &str) -> Result<InvoiceResponse> {
+    pub async fn get_incoming_invoice(
+        &self,
+        invoice_id: &str,
+    ) -> Result<InvoiceResponse, crate::Error> {
         let url = self.base_url.join("/v1/invoices/")?.join(invoice_id)?;
 
         let res = self.make_get(url).await?;
 
-        match serde_json::from_value(res.clone()) {
-            Ok(res) => Ok(res),
-            Err(_) => {
-                log::error!("Api error response on find invoice");
-                log::error!("{}", res);
-                bail!("Could not find invoice")
-            }
-        }
+        let invoice: InvoiceResponse = serde_json::from_value(res.clone())?;
+        Ok(invoice)
     }
 
     /// Get invoices with filtering and pagination
     pub async fn get_invoices(
         &self,
         params: Option<InvoiceQueryParams>,
-    ) -> Result<InvoiceListResponse> {
+    ) -> Result<InvoiceListResponse, crate::Error> {
         let query_string = params.unwrap_or_default().to_query_string();
         let url_string = format!("/v1/invoices{}", query_string);
         let url = self.base_url.join(&url_string)?;
 
         let res = self.make_get(url).await?;
 
-        match serde_json::from_value(res.clone()) {
-            Ok(res) => Ok(res),
-            Err(_) => {
-                log::error!("Api error response on get invoices");
-                log::error!("{}", res);
-                bail!("Could not get invoices")
-            }
-        }
+        let list: InvoiceListResponse = serde_json::from_value(res.clone())?;
+        Ok(list)
     }
 
     /// Invoice quote
-    pub async fn invoice_quote(&self, invoice_id: &str) -> Result<InvoiceQuoteResponse> {
+    pub async fn invoice_quote(
+        &self,
+        invoice_id: &str,
+    ) -> Result<InvoiceQuoteResponse, crate::Error> {
         let url = self
             .base_url
             .join(&format!("/v1/invoices/{invoice_id}/quote"))?;
 
         let res = self.make_post(url, None::<String>).await?;
 
-        match serde_json::from_value(res.clone()) {
-            Ok(res) => Ok(res),
-            Err(_) => {
-                log::error!("Api error response on invoice quote");
-                log::error!("{}", res);
-                bail!("Could get invoice quote")
-            }
-        }
+        let quote: InvoiceQuoteResponse = serde_json::from_value(res.clone())?;
+        Ok(quote)
     }
 }
 
@@ -252,20 +339,27 @@ mod tests {
 
     #[test]
     fn test_invoice_query_params_single() {
-        let params = InvoiceQueryParams::new().filter("state eq 'PAID'".to_string());
+        let params = InvoiceQueryParams::new().filter(Filter::eq("state", "PAID"));
         assert_eq!(params.to_query_string(), "?$filter=state%20eq%20%27PAID%27");
     }
 
     #[test]
     fn test_invoice_query_params_multiple() {
         let params = InvoiceQueryParams::new()
-            .filter("state eq 'PAID'".to_string())
-            .orderby("created desc".to_string())
+            .filter(Filter::eq("state", "PAID"))
+            .filter(Filter::eq("correlationId", "foo"))
+            .orderby("created desc")
             .top(10)
             .skip(5);
         let query = params.to_query_string();
         assert!(query.starts_with("?"));
-        assert!(query.contains("$filter=state%20eq%20%27PAID%27"));
+        assert!(
+            query
+                .contains("$filter=state%20eq%20%27PAID%27%20and%20correlationId%20eq%20%27foo%27")
+                || query.contains(
+                    "$filter=correlationId%20eq%20%27foo%27%20and%20state%20eq%20%27PAID%27"
+                )
+        );
         assert!(query.contains("$orderby=created%20desc"));
         assert!(query.contains("$top=10"));
         assert!(query.contains("$skip=5"));

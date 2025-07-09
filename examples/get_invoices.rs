@@ -1,7 +1,7 @@
 use anyhow::Result;
 use dotenvy::dotenv;
 use std::env;
-use strike_rs::{InvoiceQueryParams, Strike};
+use strike_rs::{Filter, InvoiceQueryParams, Strike};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     // Example 3: Get invoices with filtering
     println!("\nGetting paid invoices...");
     let params = InvoiceQueryParams::new()
-        .filter("state eq 'PAID'".to_string())
+        .filter(Filter::eq("state", "PAID"))
         .orderby("created desc".to_string())
         .top(10);
     let invoices = client.get_invoices(Some(params)).await?;
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     // Example 4: Get invoices with complex filter
     println!("\nGetting USD invoices...");
     let params = InvoiceQueryParams::new()
-        .filter("currency eq 'USD'".to_string())
+        .filter(Filter::eq("currency", "USD"))
         .orderby("created desc".to_string());
     let invoices = client.get_invoices(Some(params)).await?;
     println!("Found {} USD invoices", invoices.count);

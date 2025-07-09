@@ -14,12 +14,15 @@ async fn main() -> Result<()> {
     // Example 1: Exchange $5.00 USD for BTC
     println!("Creating currency exchange quote: $5.00 USD -> BTC");
 
-    let exchange_request = CurrencyExchangeQuoteRequest::new(
-        Currency::USD,
-        Currency::BTC,
-        "5.00".to_string(),
-        Currency::USD,
-    );
+    let exchange_request = CurrencyExchangeQuoteRequest {
+        sell: Currency::USD,
+        buy: Currency::BTC,
+        amount: ExchangeAmount {
+            amount: "5.00".to_string(),
+            currency: Currency::USD,
+            fee_policy: None,
+        },
+    };
 
     let quote = client
         .create_currency_exchange_quote(exchange_request)
@@ -48,8 +51,11 @@ async fn main() -> Result<()> {
     let exchange_request_with_fee = CurrencyExchangeQuoteRequest {
         sell: Currency::USD,
         buy: Currency::BTC,
-        amount: ExchangeAmount::new("10.00".to_string(), Currency::USD)
-            .with_fee_policy(FeePolicy::Inclusive),
+        amount: ExchangeAmount {
+            amount: "10.00".to_string(),
+            currency: Currency::USD,
+            fee_policy: Some(FeePolicy::Inclusive),
+        },
     };
 
     let quote_with_fee = client
@@ -80,12 +86,15 @@ async fn main() -> Result<()> {
     // Example 5: Create a quote for buying a specific amount of BTC
     println!("\nCreating quote to buy 0.0001 BTC:");
 
-    let btc_amount_request = CurrencyExchangeQuoteRequest::new(
-        Currency::USD,
-        Currency::BTC,
-        "0.0001".to_string(),
-        Currency::BTC,
-    );
+    let btc_amount_request = CurrencyExchangeQuoteRequest {
+        sell: Currency::USD,
+        buy: Currency::BTC,
+        amount: ExchangeAmount {
+            amount: "0.0001".to_string(),
+            currency: Currency::BTC,
+            fee_policy: None,
+        },
+    };
 
     let btc_quote = client
         .create_currency_exchange_quote(btc_amount_request)

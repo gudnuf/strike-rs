@@ -7,7 +7,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use rand::distr::Alphanumeric;
 use rand::Rng;
 use reqwest::{Client, IntoUrl, Url};
@@ -22,6 +22,7 @@ pub mod pay_ln;
 pub mod webhooks;
 
 pub use error::Error;
+pub use error::StrikeErrorCode;
 pub use exchange::*;
 pub use invoice::*;
 pub use pay_ln::*;
@@ -198,7 +199,7 @@ impl Strike {
     pub fn new(api_key: &str, api_url: Option<String>) -> anyhow::Result<Self> {
         let base_url = match api_url {
             Some(url) => Url::from_str(&url)?,
-            None => Url::from_str("https://api.strike.me")?,
+            _ => Url::from_str("https://api.strike.me")?,
         };
 
         let client = reqwest::Client::builder().build()?;
@@ -216,7 +217,56 @@ impl Strike {
         })
     }
 
-    async fn make_get<U>(&self, url: U) -> Result<Value, Error>
+    /// Handle API error response
+    fn handle_api_error(&self, status: reqwest::StatusCode, text: &str) -> crate::Error {
+        // Try to parse as Strike API error
+        if let Ok(api_err) = serde_json::from_str::<crate::error::StrikeApiError>(text) {
+            return crate::Error::ApiError(api_err);
+        }
+
+        // If parsing fails, create a generic error based on status code
+        use crate::error::{StrikeApiError, StrikeApiErrorData, StrikeErrorCode};
+        use std::collections::HashMap;
+
+        let error_code = match status.as_u16() {
+            400 => StrikeErrorCode::InvalidData,
+            401 => StrikeErrorCode::Unauthorized,
+            403 => StrikeErrorCode::Forbidden,
+            404 => StrikeErrorCode::NotFound,
+            409 => StrikeErrorCode::ProcessingConflict,
+            422 => StrikeErrorCode::UnprocessableEntity,
+            429 => StrikeErrorCode::RateLimitExceeded,
+            500 => StrikeErrorCode::InternalServerError,
+            502 => StrikeErrorCode::BadGateway,
+            503 => StrikeErrorCode::ServiceUnavailable,
+            504 => StrikeErrorCode::GatewayTimeout,
+            _ => StrikeErrorCode::Unknown,
+        };
+
+        let api_error = StrikeApiError {
+            trace_id: None,
+            data: StrikeApiErrorData {
+                status: status.as_u16(),
+                code: error_code,
+                message: if text.is_empty() {
+                    format!(
+                        "HTTP {}: {}",
+                        status.as_u16(),
+                        status.canonical_reason().unwrap_or("Unknown")
+                    )
+                } else {
+                    text.to_string()
+                },
+                values: HashMap::new(),
+                validation_errors: HashMap::new(),
+                debug: None,
+            },
+        };
+
+        crate::Error::ApiError(api_error)
+    }
+
+    async fn make_get<U>(&self, url: U) -> Result<Value, crate::Error>
     where
         U: IntoUrl,
     {
@@ -227,20 +277,24 @@ impl Strike {
             .header("Content-Type", "application/json")
             .header("accept", "application/json")
             .send()
-            .await;
+            .await?;
 
-        match res {
-            Ok(res) => Ok(res.json::<Value>().await.unwrap_or_default()),
-            Err(err) => Err(err.into()),
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(self.handle_api_error(status, &text));
         }
+
+        Ok(serde_json::from_str(&text).unwrap_or_default())
     }
 
-    async fn make_post<U, T>(&self, url: U, data: Option<T>) -> anyhow::Result<Value>
+    async fn make_post<U, T>(&self, url: U, data: Option<T>) -> Result<Value, crate::Error>
     where
         U: IntoUrl,
         T: Serialize,
     {
-        let value = match data {
+        let res = match data {
             Some(data) => {
                 self.client
                     .post(url)
@@ -250,10 +304,8 @@ impl Strike {
                     .json(&data)
                     .send()
                     .await?
-                    .json::<Value>()
-                    .await?
             }
-            None => {
+            _ => {
                 self.client
                     .post(url)
                     .header("Authorization", format!("Bearer {}", self.api_key))
@@ -261,46 +313,20 @@ impl Strike {
                     .header("accept", "application/json")
                     .send()
                     .await?
-                    .json::<Value>()
-                    .await?
             }
         };
-        Ok(value)
+
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(self.handle_api_error(status, &text));
+        }
+
+        Ok(serde_json::from_str(&text).unwrap_or_default())
     }
 
-    async fn make_patch<U>(&self, url: U) -> anyhow::Result<Value>
-    where
-        U: IntoUrl,
-    {
-        Ok(self
-            .client
-            .patch(url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Length", "0")
-            .header("accept", "application/json")
-            .send()
-            .await?
-            .json::<Value>()
-            .await?)
-    }
-
-    async fn make_delete<U>(&self, url: U) -> anyhow::Result<()>
-    where
-        U: IntoUrl,
-    {
-        self.client
-            .delete(url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .send()
-            .await
-            .map_err(|err| anyhow!("Error making delete: {}", err.to_string()))?;
-
-        Ok(())
-    }
-
-    // NOTE: i was getting errors when making regular patch requests, so i made this one and it works,
-    // but we shouldn't need it
-    async fn make_patch_no_body<U>(&self, url: U) -> anyhow::Result<reqwest::Response>
+    async fn make_patch<U>(&self, url: U) -> Result<Value, crate::Error>
     where
         U: IntoUrl,
     {
@@ -312,7 +338,61 @@ impl Strike {
             .header("accept", "application/json")
             .send()
             .await?;
-        Ok(res)
+
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(self.handle_api_error(status, &text));
+        }
+
+        Ok(serde_json::from_str(&text).unwrap_or_default())
+    }
+
+    async fn make_delete<U>(&self, url: U) -> Result<(), crate::Error>
+    where
+        U: IntoUrl,
+    {
+        let res = self
+            .client
+            .delete(url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await?;
+
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(self.handle_api_error(status, &text));
+        }
+
+        Ok(())
+    }
+
+    // NOTE: i was getting errors when making regular patch requests, so i made this one and it works,
+    // but we shouldn't need it
+    async fn make_patch_no_body<U>(&self, url: U) -> anyhow::Result<Value, crate::Error>
+    where
+        U: IntoUrl,
+    {
+        let res = self
+            .client
+            .patch(url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Length", "0")
+            .header("accept", "application/json")
+            .send()
+            .await?;
+
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(self.handle_api_error(status, &text));
+        }
+
+        Ok(serde_json::from_str(&text).unwrap_or_default())
     }
 
     /*

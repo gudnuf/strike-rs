@@ -103,7 +103,10 @@ impl Strike {
     }
 
     /// Subscribe to invoice webhook
-    pub async fn subscribe_to_invoice_webhook(&self, webhook_url: String) -> anyhow::Result<()> {
+    pub async fn subscribe_to_invoice_webhook(
+        &self,
+        webhook_url: String,
+    ) -> Result<(), crate::Error> {
         let url = self.base_url.join("/v1/subscriptions")?;
 
         let subscription = WebhookRequest {
@@ -127,7 +130,7 @@ impl Strike {
     pub async fn subscribe_to_currency_exchange_webhook(
         &self,
         webhook_url: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), crate::Error> {
         let url = self.base_url.join("/v1/subscriptions")?;
 
         let subscription = WebhookRequest {
@@ -148,7 +151,9 @@ impl Strike {
     }
 
     /// Get current subscriptions
-    pub async fn get_current_subscriptions(&self) -> anyhow::Result<Vec<WebhookInfoResponse>> {
+    pub async fn get_current_subscriptions(
+        &self,
+    ) -> Result<Vec<WebhookInfoResponse>, crate::Error> {
         let url = self.base_url.join("/v1/subscriptions")?;
 
         let res = self.make_get(url).await?;
@@ -159,7 +164,7 @@ impl Strike {
     }
 
     /// Delete subscription
-    pub async fn delete_subscription(&self, webhook_id: &str) -> anyhow::Result<()> {
+    pub async fn delete_subscription(&self, webhook_id: &str) -> Result<(), crate::Error> {
         let url = self
             .base_url
             .join(&format!("/v1/subscriptions/{}", webhook_id))?;

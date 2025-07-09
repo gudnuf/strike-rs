@@ -1,12 +1,11 @@
 //! Pay Ln
 
-use anyhow::{bail, Result};
-use reqwest::StatusCode;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Amount, ConversionRate, Currency, Error, InvoiceState, LightningPaymentDetails,
-    OnchainPaymentDetails, Strike,
+    Amount, ConversionRate, Currency, InvoiceState, LightningPaymentDetails, OnchainPaymentDetails,
+    Strike,
 };
 
 /// Pay Invoice Request
@@ -76,71 +75,42 @@ impl Strike {
     pub async fn payment_quote(
         &self,
         quote_request: PayInvoiceQuoteRequest,
-    ) -> Result<PayInvoiceQuoteResponse> {
+    ) -> Result<PayInvoiceQuoteResponse, crate::Error> {
         let url = self.base_url.join("/v1/payment-quotes/lightning")?;
 
         let res = self
             .make_post(url, Some(serde_json::to_value(quote_request)?))
             .await?;
 
-        match serde_json::from_value(res.clone()) {
-            Ok(res) => Ok(res),
-            Err(_) => {
-                log::error!("Api error response on payment quote");
-                log::error!("{}", res);
-                bail!("Could not get payment quote")
-            }
-        }
+        let quote: PayInvoiceQuoteResponse = serde_json::from_value(res.clone())?;
+        Ok(quote)
     }
 
     /// Execute quote to pay invoice
-    pub async fn pay_quote(&self, payment_quote_id: &str) -> Result<InvoicePaymentResponse> {
+    pub async fn pay_quote(
+        &self,
+        payment_quote_id: &str,
+    ) -> Result<InvoicePaymentResponse, crate::Error> {
         let url = self
             .base_url
             .join(&format!("/v1/payment-quotes/{payment_quote_id}/execute"))?;
 
         let res = self.make_patch(url).await?;
 
-        match serde_json::from_value(res.clone()) {
-            Ok(res) => Ok(res),
-            Err(_) => {
-                log::error!("Api error response on payment quote execution");
-                log::error!("{}", res);
-                bail!("Could not execute payment quote")
-            }
-        }
+        let payment: InvoicePaymentResponse = serde_json::from_value(res.clone())?;
+        Ok(payment)
     }
 
     /// Get outgoing payment by payment id
     pub async fn get_outgoing_payment(
         &self,
         payment_id: &str,
-    ) -> Result<InvoicePaymentResponse, Error> {
-        let url = self
-            .base_url
-            .join(&format!("/v1/payments/{payment_id}"))
-            .map_err(|_| Error::InvalidUrl)?;
+    ) -> Result<InvoicePaymentResponse, crate::Error> {
+        let url = self.base_url.join(&format!("/v1/payments/{payment_id}"))?;
 
-        let res = match self.make_get(url).await {
-            Ok(res) => res,
-            Err(err) => {
-                if let Error::ReqwestError(err) = &err {
-                    if err.status().unwrap_or_default() == StatusCode::NOT_FOUND {
-                        return Err(Error::NotFound);
-                    }
-                }
-                return Err(err);
-            }
-        };
+        let res = self.make_get(url).await?;
 
-        match serde_json::from_value(res.clone()) {
-            Ok(res) => Ok(res),
-            Err(err) => {
-                log::error!("Api error response getting payment quote");
-                log::error!("{}", res);
-
-                Err(err.into())
-            }
-        }
+        let payment: InvoicePaymentResponse = serde_json::from_value(res.clone())?;
+        Ok(payment)
     }
 }
